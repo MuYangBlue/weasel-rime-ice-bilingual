@@ -7,6 +7,53 @@
 
 ---
 
+## 3.4.2 — 2026-10-03
+
+### 新增：英文释义竖排多行 + 词性标注
+
+- **释义多行显示**：每条义项占一行，竖排在中文候选右侧，例如
+
+  ```
+  1. 说    to speak  v.
+           to talk   v.
+           to say    v.
+  ```
+
+  可用 `multiline: false` 退回单行显示。
+- **词性标注**：释义后附 `v.` / `n.` / `pron.` 等标签。CC-CEDICT 不含词性字段，
+  这些标签是由英文释义的书写习惯**规则推断**的（如 `to xxx` → 动词），
+  实测 30.4% 的词条能判定，其余不标注——是启发式结果，不是权威标注，
+  可用 `pos: off` 关闭。
+- **`pos: auto`**（默认）：单义项直接显示；多义项若词性完全相同
+  （如「我 → I / me / my」都是 `pron.`）则隐藏，避免同一标签竖着重复；
+  词性不同时显示，如「传真 → to fax (v.) / a fax (n.)」。
+
+### 修复：`Control+Shift+Return` 会插入多行文本
+
+释义改为多行后，原有的 `commit_comment` 会把注释**原样**写进文档
+（librime 的 `Editor::CommitComment` 不处理换行），导致上屏内容变成多行并带上词性后缀。
+
+现改由新增的 `lua/bilingual_commit.lua` 接管该按键：它按候选文本直接查词表，
+取第一个义项的纯英文再上屏，不依赖注释内容。仅当候选项确实有英文释义时才拦截，
+其余情况完全退回原有行为。
+
+### 变更的数据与文件
+
+| 文件 | 变化 |
+|---|---|
+| `Rime/lua/bilingual/en.tsv` | 释义附上词性（`to speak→v.`），词条数与释义正文不变（40,794 条） |
+| `Rime/tools/build_bilingual_dict.py` | 新增词性推断与 `--no-pos` 开关 |
+| `Rime/lua/bilingual/format.lua` | 新增：多行渲染与纯文本解析，供显示与上屏共用 |
+| `Rime/lua/bilingual_commit.lua` | 新增：接管 `Control+Shift+Return`，上屏单行英文 |
+| `Rime/lua/bilingual_filter.lua` | 改用多行渲染，新增 `multiline` / `pos` 配置 |
+| `Rime/rime_ice.custom.yaml` | 挂载新 processor，补充新配置项 |
+
+词性分隔符选用 `→`（U+2192）：它在全部 40,794 条释义中出现 0 次，
+而 `·`、`|`、`[`、`%`、`&`、`°`、`@` 等常见符号都会与释义正文冲突
+（如「石膏」的化学式 `CaSO4·2(H2O)`、交叉引用的 `variant of 潔|洁[jie2]`）。
+
+---
+
 ## 3.4.1 — 2026-10-03
 
 ### 新增：候选窗双语显示（打字顺便记单词）

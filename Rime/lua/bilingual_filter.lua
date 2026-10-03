@@ -4,14 +4,21 @@
 ----
 给中文候选项的注释区（comment）加上外文释义，例如：
 
-    1. 苹果   apple
-    2. 电脑   computer
+    1. 苹果   apple  n.
+    2. 说     to speak  v.
+              to talk   v.
+              to say    v.
+
+默认竖向多行显示（每条义项一行），显示在中文候选右侧。
 
 配合方案里已有的编辑器绑定：
 
     Control+Shift+Return: commit_comment
 
 把注释直接上屏，于是这个键就变成「把当前中文换成对应英文单词」。
+注意：因为注释现在是多行的，这个键由 lua_processor@*bilingual_commit
+接管（见 lua/bilingual_commit.lua），它会按词表查出纯单行英文再上屏，
+不再依赖 commit_comment 把多行注释原样写进文档。
 
 挂载方式（写在 rime_ice.custom.yaml 的 patch 里）
 ------------------------------------------------
@@ -27,9 +34,11 @@
     bilingual_filter:
       languages: [ en ]     # 要显示的语言，按顺序取第一个命中的
       min_length: 1         # 只给长度 >= 此值的词加释义（2 = 只给词组加）
-      max_length: 0         # 释义显示长度上限，0 表示不额外截断
-      separator: " "        # 与已有注释拼接时的分隔符
+      max_length: 0         # 单行释义显示长度上限，0 表示不额外截断
+      separator: "  "       # 与已有注释拼接时的分隔符
       format: "{gloss}"     # 显示格式，可用 {gloss} {lang} {word}
+      multiline: true       # 释义竖排成多行；false 则挤在一行
+      pos: auto             # 词性：off / auto / always（详见 format.lua）
 
 配置节名之所以叫 bilingual_filter，是因为 librime-lua 把
 env.name_space 设为「* + 滤镜名」，现有 pin_cand_filter、long_word_filter
@@ -43,6 +52,7 @@ env.name_space 设为「* + 滤镜名」，现有 pin_cand_filter、long_word_fi
 ]]
 
 local loader = require("bilingual.loader")
+local format = require("bilingual.format")
 
 local M = {}
 
@@ -51,8 +61,10 @@ local DEFAULTS = {
     languages = { "en" },
     min_length = 1,
     max_length = 0,
-    separator = " ",
+    separator = "  ",
     format = "{gloss}",
+    multiline = true,
+    pos = "auto",
 }
 
 -- 汉字判定（含扩展 A 区与兼容区）。
@@ -92,7 +104,39 @@ local function log(msg)
 end
 
 
+--- 取出列表中的元素，返回 ConfigItem（同时具备 map 与标量接口）。
+--
+-- 这是一处踩过坑的地方：librime-lua 里
+--     get_at(i)                  -> ConfigItem  有 get_map() / get_value()
+--     get_value_at(i)            -> ConfigValue 只有 get_string() 等标量接口
+-- 而 LuaImpl::index 不做父类回退（只查当前类型的 methods/vars_get），
+-- 所以对 get_value_at 的返回值调 get_map() 会失败。该失败若被 pcall
+-- 吞掉就会「静默失效」——switches 读不出 name、has_switch 恒为 false，
+-- 表现就是快捷键 Ctrl+Shift+T 切了也没反应。
+--
+-- 不同版本的 librime-lua 暴露的接口不完全一致，因此这里依次尝试两条路：
+--   get_at(i)                 （较新版本）
+--   get_value_at(i).element   （ConfigValue 的 element 属性，返回 ConfigItem）
+-- 两条都不通就返回 nil，由调用方按「取不到」处理，绝不抛错。
+local function element_at(list, i)
+    local item = nil
+    pcall(function() item = list:get_at(i) end)
+    if item then
+        return item
+    end
+    pcall(function() item = list:get_value_at(i).element end)
+    return item
+end
+
+
 --- 读取列表型配置，返回 Lua 数组（元素为字符串）。
+--
+-- 列表元素有两种形态，都要能处理：
+--   1. map，如 switches: [ { name: xx, ... } ]  -> 取 name 字段
+--   2. 纯标量，如 languages: [ en ]
+--
+-- 取值顺序是「先试 map、再试标量」：对不需要的形态调用取值接口会抛错，
+-- 由 pcall 接住即可，比先判断 type 少依赖一个接口。
 local function config_list(config, path)
     local out = {}
     local ok, list = pcall(function() return config:get_list(path) end)
@@ -101,13 +145,22 @@ local function config_list(config, path)
     end
     local size = list.size or 0
     for i = 0, size - 1 do
-        local v = list:get_value_at(i)
-        if v then
-            -- 元素可能是纯字符串（如 languages），也可能是 map（如 switches）
-            if type(v.value) == "string" then
-                out[#out + 1] = v.value
-            elseif type(v.value) == "table" and v.value.name then
-                out[#out + 1] = v.value.name
+        local item = element_at(list, i)
+        if item then
+            -- map 形态（switches 的元素）
+            local name = nil
+            pcall(function()
+                name = item:get_map():get_value("name"):get_string()
+            end)
+            if type(name) == "string" and #name > 0 then
+                out[#out + 1] = name
+            else
+                -- 标量形态（languages 的元素）
+                local scalar = nil
+                pcall(function() scalar = item:get_value():get_string() end)
+                if type(scalar) == "string" and #scalar > 0 then
+                    out[#out + 1] = scalar
+                end
             end
         end
     end
@@ -148,6 +201,17 @@ function M.init(env)
     env.max_length = get_int("max_length", DEFAULTS.max_length)
     env.separator = get_str("separator", DEFAULTS.separator)
     env.format = get_str("format", DEFAULTS.format)
+    env.pos = get_str("pos", DEFAULTS.pos)
+
+    -- 布尔配置：get_bool 在没有该键时会失败，用 pcall 兜底
+    local function get_bool(key, default)
+        local ok, v = pcall(function() return config:get_bool(ns .. "/" .. key) end)
+        if ok and type(v) == "boolean" then
+            return v
+        end
+        return default
+    end
+    env.multiline = get_bool("multiline", DEFAULTS.multiline)
 
     -- 判断 switches 里是否声明了 bilingual 开关。
     -- 若未声明，get_option 会返回 false，导致功能被误判为「已关闭」，
@@ -180,8 +244,10 @@ function M.init(env)
             parts[#parts + 1] = string.format("%s=%d", lang, n)
         end
         log("初始化完成：" .. table.concat(parts, " ") ..
-            string.format("（min_length=%d, max_length=%d, switch=%s）",
-                env.min_length, env.max_length, tostring(env.has_switch)))
+            string.format("（min_length=%d, max_length=%d, multiline=%s, pos=%s, switch=%s, switches=[%s]）",
+                env.min_length, env.max_length, tostring(env.multiline),
+                tostring(env.pos), tostring(env.has_switch),
+                table.concat(switches, ",")))
     end
 end
 
@@ -190,26 +256,30 @@ end
 -- 全部取值都有兜底：即使 init 部分失败导致 env 字段缺失，
 -- 这里也只退回默认格式，不会抛错影响候选生成。
 local function render(env, word, gloss, lang)
-    -- 注意：内层 gsub 必须用括号包住，只取第一个返回值。
-    -- 否则 gsub 会返回 (字符串, 替换次数) 两个值，作为最后一个参数时
-    -- 会把「替换次数」当作外层 gsub 的第 4 个参数 n 传入；当 n == 0 时
-    -- 外层 gsub 执行零次替换，结果原样返回 "{gloss}"。
+    local opts = {
+        multiline = env.multiline,
+        pos = env.pos,
+        max_length = env.max_length or 0,
+    }
+
+    -- 释义本身的多行/词性排版交给 format 模块，这里只负责套用户配置的
+    -- 显示格式（format: "{gloss}" 等）。注意：内层 gsub 必须用括号包住，
+    -- 只取第一个返回值。否则 gsub 会返回 (字符串, 替换次数) 两个值，
+    -- 作为最后一个参数时会把「替换次数」当作外层 gsub 的第 4 个参数 n
+    -- 传入；当 n == 0 时，外层 gsub 执行零次替换，结果原样返回 "{gloss}"。
+    local body = format.render(gloss, opts)
+    if not body or body == "" then
+        return nil
+    end
+
     local function esc(s)
         return (tostring(s or ""):gsub("%%", "%%%%"))
     end
 
     local text = env.format or DEFAULTS.format
-    text = text:gsub("{gloss}", esc(gloss))
+    text = text:gsub("{gloss}", esc(body))
     text = text:gsub("{word}", esc(word))
     text = text:gsub("{lang}", esc(lang))
-
-    local max_length = env.max_length or 0
-    if max_length > 0 and #text > max_length then
-        local cut = text:sub(1, max_length)
-        local sp = cut:match("^(.*)%s")
-        text = sp and sp or cut
-        text = text:gsub("[%s;,%-]+$", "")
-    end
     return text
 end
 

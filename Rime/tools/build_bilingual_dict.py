@@ -12,10 +12,19 @@
     python build_bilingual_dict.py --min-weight 100       # 更全（约 7.7 万条）
     python build_bilingual_dict.py --max-length 20        # 释义更短，候选窗更窄
     python build_bilingual_dict.py --no-single-char       # 不收录单字（只保留词组）
+    python build_bilingual_dict.py --no-pos               # 不给释义附加词性标签
 
 输出：Rime/lua/bilingual/<lang>.tsv
 
 重新运行是安全的：会覆盖输出文件，不影响其他配置。
+
+关于词性
+--------
+CC-CEDICT 不含词性字段，因此词性是用「英文释义的书写习惯」规则推断的，
+附在义项之后并用 U+2192（→）分隔，例如：
+    to speak→v.; to talk→v.
+只有约三成义项能可靠判断，其余不标注。这是启发式结果，不是权威标注，
+若不需要可加 --no-pos 关闭。
 
 关于常用词筛选
 --------------
@@ -62,6 +71,71 @@ CROSSREF_RE = re.compile(
     r"^(variant of|old variant of|erhua variant of|see |also written|"
     r"abbr\. for|abbreviation for|used in)\b",
     re.IGNORECASE,
+)
+
+# ---------------------------------------------------------------- 词性推断
+
+# 词性标签的分隔符。选 U+2192（→）是因为它在本项目全部 40,794 条释义中
+# 出现 0 次；而 · | [ % & ° @ 等常见符号都会与释义正文冲突
+# （例如「石膏」的化学式 CaSO4·2(H2O)、交叉引用的 潔|洁）。
+POS_SEP = "→"
+
+# 元数据型释义描述的是词语来源或用法，而非语义类别，不参与词性判定。
+POS_META_RE = re.compile(
+    r"^(surname|name of|place name|given name|abbr\. for|abbreviation for|"
+    r"variant of|old variant of|erhua variant of|see |used in|lit\.|"
+    r"also written|taiwan pr\.|also pr\.|classifier for|measure word for)\b",
+    re.IGNORECASE,
+)
+
+# 只有高置信前缀才给标签，其余一律留空 —— 宁缺勿错。
+#
+# 之所以保守：CC-CEDICT 本身不含词性字段，这里纯靠英文释义的书写习惯推断。
+# 实测（40,794 条 / 58,071 个义项）可判定率约 30%。
+# 其中 "to xxx" 是最可靠的信号（CC-CEDICT 用 to 开头表示动词），占绝大多数。
+# 形容词没有可靠的形态标志，故不猜测。
+
+
+def _anchored(words):
+    """构造「整条义项恰好就是这个词类」的正则，允许尾部小括号补注。
+
+    与「以某词开头」的区别很重要：
+        "one person"  以 one 开头，但整体是名词短语 -> 不该标 num.
+        "one"         本身就是数词               -> 标 num.
+        "still yet"   以 still 开头，但不是副词   -> 不标
+        "still"                                 -> 标 adv.
+    宽松匹配会把「来意 → one's purpose in coming」误标成 num.，
+    故反复收窄到「整条即该类词」。
+    """
+    return re.compile(r"^" + words + r"\s*(\([^)]*\))?$", re.IGNORECASE)
+
+
+POS_PREFIX_RULES = (
+    ("v.", re.compile(
+        r"^(to\s|to$|be\b|am\b|is\b|are\b|was\b|were\b|been\b|being\b|"
+        r"have\b|has\b|had\b|do\b|does\b|did\b)", re.IGNORECASE)),
+    ("pron.", _anchored(
+        r"(I|me|my|mine|myself|you|your|yours|yourself|yourselves|"
+        r"he|him|his|himself|she|her|hers|herself|it|its|itself|"
+        r"we|us|our|ours|ourselves|they|them|their|theirs|themselves|"
+        r"this|that|these|those|who|whom|whose|which|what|"
+        r"someone|somebody|something|anyone|anybody|anything|"
+        r"everyone|everybody|everything|nobody|nothing|"
+        r"each other|one another)")),
+    ("prep.", _anchored(
+        r"(in|on|at|of|with|by|for|from|under|over|after|before|"
+        r"during|without|about|into|onto|toward|towards|between|among|"
+        r"through|against|inside|outside|beside|besides|beyond|within|"
+        r"upon|per|via)")),
+    ("num.", _anchored(
+        r"(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+        r"hundred|thousand|million|billion|zero|first|second|third|fourth|"
+        r"fifth|sixth|seventh|eighth|ninth|tenth|ten thousand)")),
+    ("adv.", _anchored(
+        r"(very|quite|rather|extremely|too|not|never|always|often|"
+        r"sometimes|already|still|just|only|again|also|almost|nearly|"
+        r"together|perhaps|maybe|probably|definitely|certainly)")),
+    ("n.", re.compile(r"^(a|an|the)\s+\S", re.IGNORECASE)),
 )
 
 
@@ -236,6 +310,46 @@ def clean_sense(sense):
     return s.strip(" ;,")
 
 
+def guess_pos(sense):
+    """从英文释义推断词性，无法可靠判断时返回空字符串。
+
+    CC-CEDICT 不含词性字段，这里只能依据英文释义的书写习惯推断。
+    因此规则刻意保守：拿不准就不标，避免给用户错误信息。
+
+    实测覆盖率（40,794 条 / 58,071 个义项）：约 31% 能判定，
+    其中绝大多数是 "to do sth." 形式的动词。
+    """
+    s = sense.strip()
+    if not s:
+        return ""
+
+    # 元数据（surname / variant of / used in ...）描述的是来源，不是语义类别
+    if POS_META_RE.match(s):
+        return ""
+
+    for tag, pattern in POS_PREFIX_RULES:
+        if pattern.match(s):
+            return tag
+
+    return ""
+
+
+def annotate_pos(text):
+    """给「义项1; 义项2」形式的释义串逐个附加词性，无法判定的义项不附加。
+
+        "to speak; to talk"  ->  "to speak→v.; to talk→v."
+        "apple"              ->  "apple"
+    """
+    out = []
+    for sense in text.split("; "):
+        sense = sense.strip()
+        if not sense:
+            continue
+        tag = guess_pos(sense)
+        out.append(sense + POS_SEP + tag if tag else sense)
+    return "; ".join(out)
+
+
 def strip_dangling(text):
     """移除结尾处残缺的成分：未闭合括号、被截断的长词组残片、裸标点。
 
@@ -363,6 +477,8 @@ def main():
                     help="不收录单字，只保留词组")
     ap.add_argument("--no-reading-match", action="store_true",
                     help="不做单字读音匹配（默认会用字表读音挑出对应的义项）")
+    ap.add_argument("--no-pos", action="store_true",
+                    help="不给释义附加词性标签（默认用规则推断，附在「%s」之后）" % POS_SEP)
     ap.add_argument("--max-length", type=int, default=30,
                     help="释义最大字符数，0 表示不限（默认 30）")
     ap.add_argument("--max-senses", type=int, default=2,
@@ -415,6 +531,7 @@ def main():
     n_word = 0
     n_single = 0
     n_reading_matched = 0
+    n_pos = 0
     for word, weight in weights.items():
         is_single = len(word) == 1
         threshold = args.min_weight_single if is_single else args.min_weight
@@ -435,6 +552,11 @@ def main():
         text = build_gloss(gloss, args.max_senses, args.max_length)
         if not text:
             continue
+        if not args.no_pos:
+            annotated = annotate_pos(text)
+            if annotated.count(POS_SEP) > text.count(POS_SEP):
+                n_pos += 1
+            text = annotated
         rows[word] = text
         if is_single:
             n_single += 1
@@ -459,13 +581,17 @@ def main():
         f.write("# 发布方：MDBG (https://www.mdbg.net/chinese/dictionary?page=cc-cedict)\n")
         f.write("# 授权：  CC-BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)\n")
         f.write("#\n")
-        f.write("# 生成参数：min_weight=%d  min_weight_single=%d  max_length=%d  max_senses=%d  keep_traditional=%s  reading_match=%s\n"
+        f.write("# 生成参数：min_weight=%d  min_weight_single=%d  max_length=%d  max_senses=%d  keep_traditional=%s  reading_match=%s  pos=%s\n"
                 % (args.min_weight, args.min_weight_single, args.max_length,
-                   args.max_senses, args.keep_traditional, not args.no_reading_match))
+                   args.max_senses, args.keep_traditional, not args.no_reading_match,
+                   "off" if args.no_pos else "auto"))
         f.write("# 生成时间：%s\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
         f.write("# 词条数：  %d（词组 %d，单字 %d）\n" % (len(rows), n_word, n_single))
         f.write("#\n")
         f.write("# 格式：中文词<Tab>释义\n")
+        if not args.no_pos:
+            f.write("#       释义可用 %s 附词性，如「to speak%sv.」；\n" % (POS_SEP, POS_SEP))
+            f.write("#       仅约三成义项能可靠判断词性，其余不标注（由规则推断，非权威数据）。\n")
         for word in sorted(rows):
             f.write("%s\t%s\n" % (word, rows[word]))
 
@@ -474,6 +600,9 @@ def main():
     log("已生成：%s" % out_path)
     log("  词条数：%d（词组 %d，单字 %d）" % (len(rows), n_word, n_single))
     log("  其中单字按读音匹配到义项的：%d" % n_reading_matched)
+    if not args.no_pos:
+        log("  附加词性标签的词条：%d（%.1f%%，规则推断，非权威数据）"
+            % (n_pos, 100.0 * n_pos / max(1, len(rows))))
     log("  体积：  %.2f MB" % (size / 1048576.0))
     if skipped_no_cjk:
         log("  跳过纯拉丁词条：%d" % skipped_no_cjk)

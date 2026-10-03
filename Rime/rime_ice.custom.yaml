@@ -56,6 +56,20 @@ patch:
     - { accept: "Control+Shift+T", toggle: bilingual, when: always }
 
   # ------------------------------------------------------------------
+  # 3b. 接管 Ctrl+Shift+Return，让上屏的是单行英文
+  #
+  #     方案原有的绑定是 commit_comment（把注释原样上屏）。现在注释是
+  #     多行还带词性，直接上屏会往文档里插入多行文本，因此改由
+  #     lua_processor@*bilingual_commit 处理：它按候选文本查词表，
+  #     取第一个义项的纯英文再上屏。
+  #
+  #     插在下标 0（processors 列表最前），确保先于 key_binder 拿到按键。
+  #     该 processor 只在「Ctrl+Shift+回车」且候选项有英文释义时才拦截，
+  #     其余情况一律返回 kNoop，不影响其它按键。
+  # ------------------------------------------------------------------
+  "engine/processors/@before 0": "lua_processor@*bilingual_commit"
+
+  # ------------------------------------------------------------------
   # 4. 滤镜自身配置
   #
   #    配置节名必须与滤镜同名（bilingual_filter），因为 librime-lua 会把
@@ -68,8 +82,15 @@ patch:
     min_length: 1       # 1 = 单字与词组都显示释义（学单词效果最强）
                         # 2 = 只显示 2 字及以上的词组
                         # 嫌候选密时用 Ctrl+Shift+T 关掉整个功能即可
-    max_length: 0       # 释义显示长度上限，0 = 不在显示层额外截断
+    max_length: 0       # 单行释义显示长度上限，0 = 不在显示层额外截断
                         # （数据生成时已限制为 30 字符）
     separator: "  "     # 与已有注释拼接时的分隔符
     format: "{gloss}"   # 显示格式，可用 {gloss} {lang} {word}
                         # 例如改成 "→ {gloss}" 会显示为「苹果 → apple」
+    multiline: true     # true = 释义竖排成多行（每条义项一行）
+                        # false = 挤回一行（与加词性之前的表现一致）
+    pos: auto           # 词性标注：off 不显示 / auto 自动 / always 总是显示
+                        # auto：单义项直接显示；多义项若词性完全相同
+                        # （如「我 → I / me / my」都是 pron.）则隐藏，
+                        # 避免同一个标签竖着重复；词性不同时显示，
+                        # 如「传真 → to fax (v.) / a fax (n.)」
