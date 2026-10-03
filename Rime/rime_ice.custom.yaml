@@ -1,0 +1,73 @@
+# Rime schema patch
+# encoding: utf-8
+#
+# 雾凇拼音的本地定制。
+# 本文件只放个人改动，不动 rime_ice.schema.yaml 等上游文件，
+# 这样以后更新雾凇配置时不会覆盖这里的内容。
+#
+# 本次内容：候选窗双语显示（中文候选附外文释义，打字顺便记单词）
+# 数据来源：CC-CEDICT (https://cc-cedict.org/)，授权 CC-BY-SA 4.0
+#
+# 修改后需「重新部署」才生效。
+
+patch:
+
+  # ------------------------------------------------------------------
+  # 1. 开关：可用快捷键临时关闭双语显示
+  #    沿用方案中 emoji 开关的写法（reset: 1 表示默认开启）
+  # ------------------------------------------------------------------
+  "switches/@next":
+    name: bilingual
+    states: [ 中, 中英 ]
+    abbrev: [ 中, 英 ]
+    reset: 1
+
+  # ------------------------------------------------------------------
+  # 2. 挂载滤镜
+  #
+  #    位置说明（filters 列表下标从 0 开始）：
+  #      0 corrector
+  #      1 radical_reverse_lookup
+  #      2 autocap_filter
+  #      3 v_filter
+  #      4 pin_cand_filter
+  #      5 long_word_filter
+  #      6 reduce_english_filter
+  #      7 simplifier@emoji        <-- 插在它前面
+  #
+  #    必须排在 corrector 之后：corrector 用 comment 判断错音后会清空它，
+  #    注释区正好让给英文；若排在它前面会被清掉。
+  #    必须排在 simplifier@emoji 与 simplifier@traditionalize 之前：
+  #    此时候选文本仍是简体汉字，才查得到词表。
+  #
+  #    ⚠ 这里的 7 是按下标插入，属索引依赖写法。若以后更新了上游的
+  #    rime_ice.schema.yaml 且 filters 增删了元素，需要重新核对下标。
+  #    部署后可在 build/rime_ice.schema.yaml 的 engine/filters 里确认实际顺序。
+  # ------------------------------------------------------------------
+  "engine/filters/@before 7": "lua_filter@*bilingual_filter"
+
+  # ------------------------------------------------------------------
+  # 3. 快捷键：切换双语显示
+  #    when: always 与现有的 Ctrl+Shift+3/4（切换标点/简繁）保持一致
+  #    注意：Ctrl+Shift+T 在浏览器中是「重新打开关闭的标签页」，
+  #    若冲突可改为 when: composing（仅输入时生效）
+  # ------------------------------------------------------------------
+  "key_binder/bindings/+":
+    - { accept: "Control+Shift+T", toggle: bilingual, when: always }
+
+  # ------------------------------------------------------------------
+  # 4. 滤镜自身配置
+  #
+  #    配置节名必须与滤镜同名（bilingual_filter），因为 librime-lua 会把
+  #    env.name_space 设为「* + 滤镜名」，现有 pin_cand_filter、
+  #    long_word_filter 等都遵循此约定。
+  # ------------------------------------------------------------------
+  bilingual_filter:
+    languages: [ en ]   # 语言列表，按顺序取第一个命中的释义。
+                        # 以后加日语：放入 lua/bilingual/ja.tsv，这里改成 [ en, ja ]
+    min_length: 2       # 只给 2 字及以上的词加释义（设为 1 则单字也显示）
+    max_length: 0       # 释义显示长度上限，0 = 不在显示层额外截断
+                        # （数据生成时已限制为 30 字符）
+    separator: "  "     # 与已有注释拼接时的分隔符
+    format: "{gloss}"   # 显示格式，可用 {gloss} {lang} {word}
+                        # 例如改成 "→ {gloss}" 会显示为「苹果 → apple」
