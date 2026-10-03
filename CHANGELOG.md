@@ -3,7 +3,39 @@
 本项目为「小狼毫 0.17.4 + 雾凇拼音」的本地配置与定制。
 
 版本号记录本项目配置与定制的整体状态；上游雾凇拼音、小狼毫自身的版本见各自文件中的
-`schema/version` 与 `installation.yaml`。
+`schema/version`。
+
+---
+
+## 3.4.3 — 2026-10-03
+
+### 修复：移除指向私有词库的悬空引用
+
+`Rime/rime_ice.dict.yaml` 的 `import_tables` 中曾引用了两个本地私有词库，
+其中一个在磁盘上并不存在，导致部署时报：
+
+```
+E dict_compiler.cc:55] source file '...' does not exist.
+E deployment_tasks.cc:372] dictionary 'rime_ice' failed to compile.
+```
+
+该引用自 2026-08-25 起就未生效（详见 3.4.1 的「已知阻塞」一节）。
+本次把两条引用一并移除，**克隆本仓库后可直接部署，不再报错**。
+
+私有词库属于个人内容，不纳入公开仓库；如需使用，在本地
+`import_tables` 中自行追加即可（注意别提交该改动）。
+
+### 调整：公开仓库不再包含任何个人内容
+
+本仓库为公开分发，已清理以下内容：
+
+| 内容 | 处理 |
+|---|---|
+| `Rime/installation.yaml`、`Rime/user.yaml` | 含本机安装 UUID 与方案使用记录，改为不跟踪（本地保留） |
+| 个人词库文件（由外部工具生成的 .dict.yaml） | 移出仓库 |
+| `Rime/rime_ice.dict.yaml` 的两条私有词库引用 | 移除 |
+
+上述清理覆盖**全部历史提交**，不只是最新版本。
 
 ---
 
@@ -134,27 +166,28 @@ python Rime/tools/build_bilingual_dict.py --min-weight 50000 # 更精简
 部署时出现两条错误：
 
 ```
-E dict_compiler.cc:55] source file 'Rime/private_dict_common.dict.yaml' does not exist.
+E dict_compiler.cc:55] source file '...' does not exist.
 E deployment_tasks.cc:372] dictionary 'rime_ice' failed to compile.
 ```
 
-`Rime/rime_ice.dict.yaml` 第 15 行引用的 `private_dict_common` 词库文件在磁盘上不存在。
+`Rime/rime_ice.dict.yaml` 的 `import_tables` 中引用了两个本地私有词库，
+而这两个文件在磁盘上不存在（其中一个仅存在于本地、未纳入版本控制）。
 
 据时间戳判断，该问题自 2026-08-25 13:25 起就存在：
 
 | 文件 | 时间 |
 |---|---|
-| `Rime/rime_ice.dict.yaml`（加入 private_dict 引用） | 2026-08-25 13:25 |
+| `Rime/rime_ice.dict.yaml`（加入私有词库引用） | 2026-08-25 13:25 |
 | `Rime/build/rime_ice.table.bin`（最后一次成功编译） | 2026-08-25 12:33 |
 
-即 `table.bin` 比词库源文件早约 52 分钟，且 `Rime/build/` 中从未出现 private_dict 产物——
-**本地私有词库实际上一直没有生效**。
+即 `table.bin` 比词库源文件早约 52 分钟，且 `Rime/build/` 中从未出现私有词库产物——
+**该私有词库实际上一直没有生效**。
 
 **对本次双语功能的影响：无。** 双语滤镜在 Lua 层直接读取 `Rime/lua/bilingual/en.tsv`，
 不经过 `table.bin`；中文候选仍由既有的 `table.bin` 正常产出（用户词库在 2026-10-03 仍有写入，
 说明中文输入本身工作正常）。因此本功能可以独立生效于该问题之外。
 
-该问题仅意味着本地私有词库的词条没有被纳入候选。
+该问题仅意味着私有词库的词条没有被纳入候选。**已在 3.4.3 修复**：两条引用已移除。
 
 ---
 
@@ -162,6 +195,5 @@ E deployment_tasks.cc:372] dictionary 'rime_ice' failed to compile.
 
 | 问题 | 说明 | 状态 |
 |---|---|---|
-| `private_dict_common` 悬空引用 | `rime_ice.dict.yaml` 第 15 行引用了不存在的词库文件，导致 `dictionary 'rime_ice' failed to compile`；本地私有词库自 2026-08-25 起一直未生效 | 未修复（用户决定暂不处理） |
-| `build/` 与源文件不同步 | `rime_ice.table.bin` 停留在 2026-08-25，未随本次部署刷新（因上一条失败） | 未修复 |
+| `build/` 与源文件不同步 | `rime_ice.table.bin` 停留在 2026-08-25，未随后续部署刷新 | 未修复（重新部署即会重建） |
 | 双拼缺 `custom_phrase_double.txt` | 双拼方案引用了该文件但未创建 | 未修复（当前 schema_list 只用 rime_ice，不影响） |

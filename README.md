@@ -114,6 +114,5 @@ CC-CEDICT 数据按 CC-BY-SA 4.0 使用，署名信息同时保存在
 
 ## 已知问题
 
-- `Rime/rime_ice.dict.yaml` 第 15 行引用了不存在的 `private_dict_common.dict.yaml`，
-  部署时会报 `dictionary 'rime_ice' failed to compile`。
-  这是上游配置的遗留引用，不影响双语功能。
+无。此前 `Rime/rime_ice.dict.yaml` 中指向本地私有词库的两条悬空引用已移除，
+部署时不再报 `dictionary 'rime_ice' failed to compile`，克隆后可直接部署。
