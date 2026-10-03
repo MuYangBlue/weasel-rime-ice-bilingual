@@ -11,10 +11,19 @@
     python build_bilingual_dict.py --min-weight 50000     # 更精简（约 1.2 万条）
     python build_bilingual_dict.py --min-weight 100       # 更全（约 7.7 万条）
     python build_bilingual_dict.py --max-length 20        # 释义更短，候选窗更窄
+    python build_bilingual_dict.py --no-single-char       # 不收录单字（只保留词组）
 
 输出：Rime/lua/bilingual/<lang>.tsv
 
 重新运行是安全的：会覆盖输出文件，不影响其他配置。
+
+关于常用词筛选
+--------------
+以两份数据作为「常用度」依据：
+  - cn_dicts/base.dict.yaml  词库（词组）
+  - cn_dicts/8105.dict.yaml  《通用规范汉字表》字表（单字）
+单字只存在于字表中，词库不含单字，故两者都需要，否则「我、爱、你」
+这类最高频的字会全部漏掉。
 """
 
 import argparse
@@ -34,7 +43,10 @@ CEDICT_URL = "https://www.mdbg.net/chinese/export/cedict/cedict_1_0_ts_utf-8_mdb
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 RIME_DIR = os.path.dirname(SCRIPT_DIR)
 
+# 词组来源（不含单字）
 DEFAULT_BASE_DICT = os.path.join(RIME_DIR, "cn_dicts", "base.dict.yaml")
+# 单字来源（《通用规范汉字表》）
+DEFAULT_CHAR_DICT = os.path.join(RIME_DIR, "cn_dicts", "8105.dict.yaml")
 DEFAULT_OUTPUT_DIR = os.path.join(RIME_DIR, "lua", "bilingual")
 
 # 汉字范围（含扩展 A 区、兼容区）
@@ -56,7 +68,17 @@ CROSSREF_RE = re.compile(
 # ---------------------------------------------------------------- 工具函数
 
 def log(msg):
-    print(msg, flush=True)
+    """输出日志。
+
+    Windows 控制台默认 GBK，遇到生僻字（如扩展 A 区的 㑇）会抛
+    UnicodeEncodeError，因此这里降级处理，只影响日志显示，不影响生成结果。
+    """
+    try:
+        print(msg, flush=True)
+    except UnicodeEncodeError:
+        enc = sys.stdout.encoding or "utf-8"
+        safe = msg.encode(enc, errors="replace").decode(enc, errors="replace")
+        print(safe, flush=True)
 
 
 def fetch_cedict(cache_dir):
@@ -79,7 +101,7 @@ def fetch_cedict(cache_dir):
 
 
 def load_weights(path):
-    """读取词库，返回 {词: 权重}。权重用作「常用度」代理。"""
+    """读取词库或字表，返回 {词: 权重}。权重用作「常用度」代理。"""
     weights = {}
     with io.open(path, encoding="utf-8") as f:
         for line in f:
@@ -92,6 +114,94 @@ def load_weights(path):
                 except ValueError:
                     pass
     return weights
+
+
+def load_all_weights(paths):
+    """合并多份来源的权重（词库 + 字表）。
+
+    同一词条在多处出现时取较大权重，避免被低权重的重复条目压低。
+    """
+    merged = {}
+    for p in paths:
+        if not p or not os.path.isfile(p):
+            log("  跳过不存在的来源：%s" % p)
+            continue
+        one = load_weights(p)
+        log("  %s：%d 条" % (os.path.basename(p), len(one)))
+        for word, weight in one.items():
+            if word not in merged or weight > merged[word]:
+                merged[word] = weight
+    return merged
+
+
+def load_pronunciations(path):
+    """从字表读取 {字: [(拼音, 频次), ...]}。
+
+    字表（8105.dict.yaml）形如：
+        说	shui	1
+        说	shuo	12000460
+    频次是真实语料统计，可用来判断哪个读音才是常用音，
+    进而选出与之匹配的义项（否则「说」会取到 to persuade 这种低频义）。
+    """
+    readings = {}
+    if not path or not os.path.isfile(path):
+        return readings
+    with io.open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.startswith("#"):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) == 3:
+                try:
+                    freq = int(parts[2])
+                except ValueError:
+                    continue
+                readings.setdefault(parts[0], []).append((parts[1], freq))
+    # 每个字按频次降序，常用音在前
+    for ch in readings:
+        readings[ch].sort(key=lambda x: -x[1])
+    return readings
+
+
+def cedict_pinyin_to_plain(pin):
+    """把 CC-CEDICT 的拼音转成字表用的无调、小写、无空格形式。
+
+    CC-CEDICT: "shuo1" / "zhong1 guo2"  ->  "shuo" / "zhongguo"
+    字表:      "shuo" / "zhong"
+    """
+    return re.sub(r"[^a-z]", "", pin.lower())
+
+
+def pick_variants(word, variants, readings):
+    """选出该词条的义项。
+
+    单字且字表中有读音记录时，优先采用读音与输入音一致的义项——
+    这既修正常用度判断，也保证释义和你实际打出的音对应。
+    找不到匹配时退回原来的排序结果。
+    """
+    ordered = order_variants(variants)
+
+    if len(word) != 1 or not readings:
+        return ordered
+
+    recs = readings.get(word)
+    if not recs:
+        return ordered
+
+    # 按字表频次从高到低，逐个读音查找匹配的 CEDICT 义项
+    for plain, _freq in recs:
+        if not plain:
+            continue
+        matched = [
+            v for v in ordered
+            if cedict_pinyin_to_plain(v[1]) == plain
+        ]
+        if matched:
+            # 命中的读音义项排最前，其余作为补充留在后面
+            rest = [v for v in ordered if v not in matched]
+            return matched + rest
+
+    return ordered
 
 
 def clean_sense(sense):
@@ -246,12 +356,21 @@ def main():
     )
     ap.add_argument("--lang", default="en", help="语言代码，决定输出文件名（默认 en）")
     ap.add_argument("--min-weight", type=int, default=10000,
-                    help="只保留词库中权重不低于此值的词（默认 10000，约 3.3 万条）")
+                    help="词组的最低权重（默认 10000，约 3.3 万条）")
+    ap.add_argument("--min-weight-single", type=int, default=0,
+                    help="单字的最低权重（默认 0 = 收录字表中全部有释义的单字）")
+    ap.add_argument("--no-single-char", action="store_true",
+                    help="不收录单字，只保留词组")
+    ap.add_argument("--no-reading-match", action="store_true",
+                    help="不做单字读音匹配（默认会用字表读音挑出对应的义项）")
     ap.add_argument("--max-length", type=int, default=30,
                     help="释义最大字符数，0 表示不限（默认 30）")
     ap.add_argument("--max-senses", type=int, default=2,
                     help="每个词最多保留几个义项（默认 2）")
-    ap.add_argument("--base-dict", default=DEFAULT_BASE_DICT, help="用于筛选常用词的主词库")
+    ap.add_argument("--base-dict", default=DEFAULT_BASE_DICT,
+                    help="词组来源（用于筛选常用词）")
+    ap.add_argument("--char-dict", default=DEFAULT_CHAR_DICT,
+                    help="单字来源（《通用规范汉字表》）")
     ap.add_argument("--output", default=None, help="输出文件路径")
     ap.add_argument("--cache-dir", default=None, help="CC-CEDICT 缓存目录（默认系统临时目录）")
     ap.add_argument("--keep-traditional", action="store_true",
@@ -266,12 +385,25 @@ def main():
     # 1. 数据源
     gz_path = fetch_cedict(cache_dir)
 
-    # 2. 常用词表（用主词库权重作为常用度代理）
+    # 2. 常用度来源：词组来自词库，单字来自字表
     if not os.path.isfile(args.base_dict):
-        log("错误：找不到主词库 %s" % args.base_dict)
+        log("错误：找不到词组来源 %s" % args.base_dict)
         return 1
-    weights = load_weights(args.base_dict)
-    log("主词库词条数：%d" % len(weights))
+    sources = [args.base_dict]
+    if not args.no_single_char:
+        if os.path.isfile(args.char_dict):
+            sources.append(args.char_dict)
+        else:
+            log("警告：找不到单字来源 %s，将只收录词组" % args.char_dict)
+    log("常用度来源：")
+    weights = load_all_weights(sources)
+    log("  合并后共 %d 个候选词条" % len(weights))
+
+    # 单字读音表（用于挑出与实际读音相符的义项）
+    readings = {}
+    if not args.no_single_char and not args.no_reading_match:
+        readings = load_pronunciations(args.char_dict)
+        log("  单字读音记录：%d 个字" % len(readings))
 
     # 3. 解析 CC-CEDICT
     entries, total = parse_cedict(gz_path)
@@ -280,8 +412,13 @@ def main():
     # 4. 取交集 + 清洗
     rows = {}
     skipped_no_cjk = 0
+    n_word = 0
+    n_single = 0
+    n_reading_matched = 0
     for word, weight in weights.items():
-        if weight < args.min_weight:
+        is_single = len(word) == 1
+        threshold = args.min_weight_single if is_single else args.min_weight
+        if weight < threshold:
             continue
         if word not in entries:
             continue
@@ -289,12 +426,20 @@ def main():
         if not CJK_RE.search(word):
             skipped_no_cjk += 1
             continue
-        variants = order_variants(entries[word])
+        variants = pick_variants(word, entries[word], readings)
+        if is_single and readings.get(word):
+            top_plain = readings[word][0][0]
+            if any(cedict_pinyin_to_plain(v[1]) == top_plain for v in variants):
+                n_reading_matched += 1
         gloss = "/".join(v[2] for v in variants)
         text = build_gloss(gloss, args.max_senses, args.max_length)
         if not text:
             continue
         rows[word] = text
+        if is_single:
+            n_single += 1
+        else:
+            n_word += 1
 
     if args.keep_traditional:
         for word in list(rows.keys()):
@@ -314,10 +459,11 @@ def main():
         f.write("# 发布方：MDBG (https://www.mdbg.net/chinese/dictionary?page=cc-cedict)\n")
         f.write("# 授权：  CC-BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/)\n")
         f.write("#\n")
-        f.write("# 生成参数：min_weight=%d  max_length=%d  max_senses=%d  keep_traditional=%s\n"
-                % (args.min_weight, args.max_length, args.max_senses, args.keep_traditional))
+        f.write("# 生成参数：min_weight=%d  min_weight_single=%d  max_length=%d  max_senses=%d  keep_traditional=%s  reading_match=%s\n"
+                % (args.min_weight, args.min_weight_single, args.max_length,
+                   args.max_senses, args.keep_traditional, not args.no_reading_match))
         f.write("# 生成时间：%s\n" % time.strftime("%Y-%m-%d %H:%M:%S"))
-        f.write("# 词条数：  %d\n" % len(rows))
+        f.write("# 词条数：  %d（词组 %d，单字 %d）\n" % (len(rows), n_word, n_single))
         f.write("#\n")
         f.write("# 格式：中文词<Tab>释义\n")
         for word in sorted(rows):
@@ -326,17 +472,29 @@ def main():
     size = os.path.getsize(out_path)
     log("")
     log("已生成：%s" % out_path)
-    log("  词条数：%d" % len(rows))
+    log("  词条数：%d（词组 %d，单字 %d）" % (len(rows), n_word, n_single))
+    log("  其中单字按读音匹配到义项的：%d" % n_reading_matched)
     log("  体积：  %.2f MB" % (size / 1048576.0))
     if skipped_no_cjk:
         log("  跳过纯拉丁词条：%d" % skipped_no_cjk)
 
     log("")
-    log("样例（前 8 条）：")
+    log("样例（排序后前 8 条）：")
     for word in sorted(rows)[:8]:
         log("  %-10s -> %s" % (word, rows[word]))
-    log("样例（随机位置）：")
-    keys = sorted(rows)
+
+    log("")
+    log("单字样例（按常用度最高的 12 个）：")
+    top_single = sorted(
+        (w for w in rows if len(w) == 1),
+        key=lambda w: -weights.get(w, 0),
+    )[:12]
+    for word in top_single:
+        log("  %-4s -> %s" % (word, rows[word]))
+
+    log("")
+    log("词组样例（随机位置）：")
+    keys = [w for w in sorted(rows) if len(w) > 1]
     for i in (len(keys) // 3, len(keys) // 2, len(keys) * 2 // 3):
         if i < len(keys):
             log("  %-10s -> %s" % (keys[i], rows[keys[i]]))
