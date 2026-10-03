@@ -47,6 +47,7 @@ weasel-0.17.4/
 __pycache__/
 *.pyc
 *.pyo
+*.bundle
 
 # 生成器下载的数据缓存（体积大，可重新下载）
 Rime/tools/.cache/
