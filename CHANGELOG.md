@@ -51,11 +51,32 @@ python Rime/tools/build_bilingual_dict.py --min-weight 100     # 约 7.7 万条�
 - 若要新增语言，把数据文件放入 `Rime/lua/bilingual/<语言>.tsv`，
   并在 `rime_ice.custom.yaml` 的 `bilingual_filter/languages` 中追加语言代码即可，无需改代码。
 
-### 已知阻塞（非本次引入）
+### 已知阻塞（非本次引入，且不影响本功能）
 
-`rime_ice` 词库编译失败：`Rime/rime_ice.dict.yaml` 引用的 `private_dict_common`
-词库文件在磁盘上不存在。该问题早于本次改动，但会阻止部署完成，
-从而使本次双语功能无法在运行时生效。详见下方「待处理」。
+部署时出现两条错误：
+
+```
+E dict_compiler.cc:55] source file 'Rime/private_dict_common.dict.yaml' does not exist.
+E deployment_tasks.cc:372] dictionary 'rime_ice' failed to compile.
+```
+
+`Rime/rime_ice.dict.yaml` 第 15 行引用的 `private_dict_common` 词库文件在磁盘上不存在。
+
+据时间戳判断，该问题自 2026-08-25 13:25 起就存在：
+
+| 文件 | 时间 |
+|---|---|
+| `Rime/rime_ice.dict.yaml`（加入 private_dict 引用） | 2026-08-25 13:25 |
+| `Rime/build/rime_ice.table.bin`（最后一次成功编译） | 2026-08-25 12:33 |
+
+即 `table.bin` 比词库源文件早约 52 分钟，且 `Rime/build/` 中从未出现 private_dict 产物——
+**本地私有词库实际上一直没有生效**。
+
+**对本次双语功能的影响：无。** 双语滤镜在 Lua 层直接读取 `Rime/lua/bilingual/en.tsv`，
+不经过 `table.bin`；中文候选仍由既有的 `table.bin` 正常产出（用户词库在 2026-10-03 仍有写入，
+说明中文输入本身工作正常）。因此本功能可以独立生效于该问题之外。
+
+该问题仅意味着本地私有词库的词条没有被纳入候选。
 
 ---
 
@@ -63,6 +84,6 @@ python Rime/tools/build_bilingual_dict.py --min-weight 100     # 约 7.7 万条�
 
 | 问题 | 说明 | 状态 |
 |---|---|---|
-| `private_dict_common` 悬空引用 | `rime_ice.dict.yaml` 第 15 行引用了不存在的词库文件，导致 `dictionary 'rime_ice' failed to compile` | 未修复 |
+| `private_dict_common` 悬空引用 | `rime_ice.dict.yaml` 第 15 行引用了不存在的词库文件，导致 `dictionary 'rime_ice' failed to compile`；本地私有词库自 2026-08-25 起一直未生效 | 未修复（用户决定暂不处理） |
 | `build/` 与源文件不同步 | `rime_ice.table.bin` 停留在 2026-08-25，未随本次部署刷新（因上一条失败） | 未修复 |
 | 双拼缺 `custom_phrase_double.txt` | 双拼方案引用了该文件但未创建 | 未修复（当前 schema_list 只用 rime_ice，不影响） |
