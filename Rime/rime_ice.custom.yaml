@@ -65,7 +65,9 @@ patch:
   bilingual_filter:
     languages: [ en ]   # 语言列表，按顺序取第一个命中的释义。
                         # 以后加日语：放入 lua/bilingual/ja.tsv，这里改成 [ en, ja ]
-    min_length: 2       # 只给 2 字及以上的词加释义（设为 1 则单字也显示）
+    min_length: 1       # 1 = 单字与词组都显示释义（学单词效果最强）
+                        # 2 = 只显示 2 字及以上的词组
+                        # 嫌候选密时用 Ctrl+Shift+T 关掉整个功能即可
     max_length: 0       # 释义显示长度上限，0 = 不在显示层额外截断
                         # （数据生成时已限制为 30 字符）
     separator: "  "     # 与已有注释拼接时的分隔符
