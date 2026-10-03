@@ -190,10 +190,18 @@ end
 -- 全部取值都有兜底：即使 init 部分失败导致 env 字段缺失，
 -- 这里也只退回默认格式，不会抛错影响候选生成。
 local function render(env, word, gloss, lang)
+    -- 注意：内层 gsub 必须用括号包住，只取第一个返回值。
+    -- 否则 gsub 会返回 (字符串, 替换次数) 两个值，作为最后一个参数时
+    -- 会把「替换次数」当作外层 gsub 的第 4 个参数 n 传入；当 n == 0 时
+    -- 外层 gsub 执行零次替换，结果原样返回 "{gloss}"。
+    local function esc(s)
+        return (tostring(s or ""):gsub("%%", "%%%%"))
+    end
+
     local text = env.format or DEFAULTS.format
-    text = text:gsub("{gloss}", (gloss or ""):gsub("%%", "%%%%"))
-    text = text:gsub("{word}", (word or ""):gsub("%%", "%%%%"))
-    text = text:gsub("{lang}", (lang or ""):gsub("%%", "%%%%"))
+    text = text:gsub("{gloss}", esc(gloss))
+    text = text:gsub("{word}", esc(word))
+    text = text:gsub("{lang}", esc(lang))
 
     local max_length = env.max_length or 0
     if max_length > 0 and #text > max_length then
