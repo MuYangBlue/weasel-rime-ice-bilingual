@@ -187,14 +187,17 @@ end
 
 
 --- 把释义按 display 格式渲染。
+-- 全部取值都有兜底：即使 init 部分失败导致 env 字段缺失，
+-- 这里也只退回默认格式，不会抛错影响候选生成。
 local function render(env, word, gloss, lang)
-    local text = env.format
-    text = text:gsub("{gloss}", gloss or "")
-    text = text:gsub("{word}", word or "")
-    text = text:gsub("{lang}", lang or "")
+    local text = env.format or DEFAULTS.format
+    text = text:gsub("{gloss}", (gloss or ""):gsub("%%", "%%%%"))
+    text = text:gsub("{word}", (word or ""):gsub("%%", "%%%%"))
+    text = text:gsub("{lang}", (lang or ""):gsub("%%", "%%%%"))
 
-    if env.max_length and env.max_length > 0 and #text > env.max_length then
-        local cut = text:sub(1, env.max_length)
+    local max_length = env.max_length or 0
+    if max_length > 0 and #text > max_length then
+        local cut = text:sub(1, max_length)
         local sp = cut:match("^(.*)%s")
         text = sp and sp or cut
         text = text:gsub("[%s;,%-]+$", "")
@@ -228,29 +231,42 @@ function M.func(input, env)
     end
 
     for cand in input:iter() do
-        local text = cand.text
-
-        -- 只处理含汉字、且长度达标的候选
-        if text and has_cjk(text) and utf8.len(text) and utf8.len(text) >= env.min_length then
-            local gloss, lang = loader.lookup_first(text, env.languages)
-            if gloss then
-                local extra = render(env, text, gloss, lang)
-                local genuine = cand:get_genuine()
-                local existing = genuine.comment or ""
-
-                if existing == "" then
-                    genuine.comment = extra
-                else
-                    -- 注释区已有内容（多为 corrector.lua 的错音提示）。
-                    -- 若只是遗留的 ［拼音］ 标记则直接替换，否则拼接，避免丢失纠错信息。
-                    if existing:match("^［.*］$") then
-                        genuine.comment = extra
-                    else
-                        genuine.comment = existing .. env.separator .. extra
-                    end
-                end
+        -- 整段标注都包在 pcall 里：任何意外（数据异常、API 变动等）
+        -- 最多只是这一个候选不加释义，绝不会影响打字本身。
+        pcall(function()
+            local text = cand.text
+            if not text or not has_cjk(text) then
+                return
             end
-        end
+
+            local len = utf8.len(text)
+            if not len or len < (env.min_length or DEFAULTS.min_length) then
+                return
+            end
+
+            local gloss, lang = loader.lookup_first(text, env.languages)
+            if not gloss then
+                return
+            end
+
+            local extra = render(env, text, gloss, lang)
+            if not extra or extra == "" then
+                return
+            end
+
+            local genuine = cand:get_genuine()
+            local existing = genuine.comment or ""
+
+            if existing == "" then
+                genuine.comment = extra
+            elseif existing:match("^［.*］$") then
+                -- corrector.lua 遗留的 ［拼音］ 标记：注释区已让出，直接替换
+                genuine.comment = extra
+            else
+                -- 已有其它内容（多为错音提示）：拼接而非覆盖，避免丢失纠错信息
+                genuine.comment = existing .. (env.separator or DEFAULTS.separator) .. extra
+            end
+        end)
         yield(cand)
     end
 end
