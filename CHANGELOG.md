@@ -17,14 +17,15 @@
 - **可直接上屏英文**：沿用方案原有的 `Control+Shift+Return`（`commit_comment`），
   注释里是英文时，这个键就变成「把当前中文换成对应英文单词」
 - **可开关**：`Control+Shift+T` 切换，方案选单中也显示为「中 / 中英」开关
-- **默认只在 2 字及以上显示**，避免单字候选过于嘈杂
+- **默认只在 2 字及以上显示**（`min_length: 2`），避免单字候选过于嘈杂；
+  数据中已收录单字，改成 1 即可让单字也显示
 
 相关文件：
 
 | 文件 | 作用 |
 |---|---|
 | `Rime/tools/build_bilingual_dict.py` | 数据生成器，可改参数重跑 |
-| `Rime/lua/bilingual/en.tsv` | 英文数据（33,156 条，0.88 MB） |
+| `Rime/lua/bilingual/en.tsv` | 英文数据（40,794 条：词组 33,156 + 单字 7,638，1.05 MB） |
 | `Rime/lua/bilingual/loader.lua` | 多语言加载器 |
 | `Rime/lua/bilingual_filter.lua` | 候选注释滤镜 |
 | `Rime/rime_ice.custom.yaml` | 补丁文件（开关、滤镜挂载、快捷键、配置） |
@@ -33,14 +34,44 @@
 
 双语数据来自 **CC-CEDICT**（<https://cc-cedict.org/>），由 MDBG 发布，
 采用 **CC-BY-SA 4.0** 授权（<https://creativecommons.org/licenses/by-sa/4.0/>）。
+常用度筛选依据 `cn_dicts/base.dict.yaml`（词组）与 `cn_dicts/8105.dict.yaml`（单字）。
 
-生成参数：`min_weight=10000`、`max_length=30`、`max_senses=2`。
-按需调整规模可重跑生成器，例如：
+数据是**词表**，不是翻译引擎：只能逐词给出释义，不会重组语序或处理语法。
+因此句子的英文需要你自己按词组合，例如「我爱你」会给出 `我 / 爱 / 你`
+三个词各自的释义，而不会给出 `I love you`。
+
+生成参数：`min_weight=10000`、`min_weight_single=0`、`max_length=30`、`max_senses=2`。
+按需调整规模可重跑生成器：
 
 ```
-python Rime/tools/build_bilingual_dict.py --min-weight 50000   # 约 1.2 万条，更精简
-python Rime/tools/build_bilingual_dict.py --min-weight 100     # 约 7.7 万条，更全
+python Rime/tools/build_bilingual_dict.py                    # 默认：词组+单字，40,794 条
+python Rime/tools/build_bilingual_dict.py --no-single-char   # 只要词组，33,156 条
+python Rime/tools/build_bilingual_dict.py --min-weight 50000 # 更精简
 ```
+
+### 单字与读音匹配
+
+单字只存在于字表（`8105.dict.yaml`），词库不含单字。若只用词库筛选，
+「我、爱、你、是、在」这类最高频的字会全部漏掉。因此单字单独从字表收录。
+
+字表还带有拼音与真实语料频次，据此为单字挑出与常用读音相符的义项，
+覆盖 543 个多音字。这修正了若干义项错配，例如：
+
+| 字 | 修正前 | 修正后 |
+|---|---|---|
+| 说 | to persuade（`shui4` 低频义） | to speak; to talk; to say |
+| 重 | — | heavy; serious |
+| 行 | — | row; line |
+| 都 | — | all; both; entirely |
+| 好 | — | good; appropriate; proper |
+
+### 修复记录
+
+| 问题 | 原因 |
+|---|---|
+| 候选显示 `苹果 {gloss}` 字面量 | Lua 多返回值陷阱：内层 `gsub` 返回 `(字符串, 次数)`，末位实参把「次数」当成外层 `gsub` 的参数 `n`；`n=0` 表示零次替换 |
+| `[bilingual]` 日志从不输出 | `local function log(...)` 在函数体内访问 `log` 指向自身，`log.info` 恒为 nil |
+| 生成器遇生僻字中断 | Windows 控制台 GBK 无法编码扩展 A 区汉字，日志已降级处理 |
 
 ### 设计说明
 
