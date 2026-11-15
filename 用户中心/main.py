@@ -1127,31 +1127,45 @@ class UserCenter(QMainWindow):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(0)
 
-        self.month_title = self._label("本月码字总结", 13, TEXT_3)
+        self.month_title = self._label("本月码字总结", 13, TEXT, bold=True)
         layout.addWidget(self.month_title)
         layout.addSpacing(10)
 
-        # 第二行：本月字数
-        self.month_words_caption = self._label("字数", 11, TEXT_3)
-        layout.addWidget(self.month_words_caption)
-        self.month_average = self._label("0", 24, TEXT, bold=True)
-        layout.addWidget(self.month_average)
+        # 本月字数与时长并排两块，复用指标方块的样式，与下方明细区观感一致。
+        tiles = QHBoxLayout()
+        tiles.setSpacing(8)
+        self.month_words_tile = MetricTile("本月字数", "0", accent=True)
+        self.month_duration_tile = MetricTile("本月时长", "00:00:00")
+        tiles.addWidget(self.month_words_tile, 1)
+        tiles.addWidget(self.month_duration_tile, 1)
+        layout.addLayout(tiles)
         layout.addSpacing(10)
 
-        # 第三行：本月时长
-        self.month_duration_caption = self._label("时长", 11, TEXT_3)
-        layout.addWidget(self.month_duration_caption)
-        self.month_duration = self._label("00:00:00", 20, TEXT, bold=True)
-        layout.addWidget(self.month_duration)
-        layout.addSpacing(12)
+        # 分隔线：把「本月」与「累计全部历史」两个口径在视觉上分开。
+        rule = QFrame()
+        rule.setFrameShape(QFrame.HLine)
+        rule.setStyleSheet(f"color: {LINE}; background-color: {LINE}; max-height: 1px; border: none;")
+        layout.addWidget(rule)
+        layout.addSpacing(8)
 
-        # 最后一行：码字总记录（累计全部历史）
-        self.month_total_caption = self._label("码字总记录", 13, TEXT_3)
-        layout.addWidget(self.month_total_caption)
+        # 码字总记录：标签居左、数值居右，逐行对齐。
+        layout.addWidget(self._label("码字总记录", 11, TEXT_3))
         layout.addSpacing(4)
-        self.month_overview = self._label("", 12, TEXT_2)
-        self.month_overview.setWordWrap(True)
-        layout.addWidget(self.month_overview)
+        self.month_total_labels: dict[str, QLabel] = {}
+        for key, caption in (
+            ("chars", "总字数"),
+            ("seconds", "总时长"),
+            ("days", "记录天数"),
+        ):
+            row = QHBoxLayout()
+            row.addWidget(self._label(caption, 12, TEXT_2))
+            row.addStretch()
+            value = self._label("—", 12, TEXT, bold=True)
+            value.setStyleSheet(f"font-size: 12px; color: {TEXT}; font-weight: 600; {MONO_STYLE}")
+            row.addWidget(value)
+            self.month_total_labels[key] = value
+            layout.addLayout(row)
+            layout.addSpacing(3)
         layout.addStretch()
         return card
 
@@ -1331,18 +1345,16 @@ class UserCenter(QMainWindow):
 
     def _refresh_month_panel(self) -> None:
         summary = month_summary(self.stats_rows, self.view_year, self.view_month)
-        # 第二行：本月字数；第三行：本月时长。
-        self.month_average.setText(f"{summary['total_chars']:,}")
-        self.month_duration.setText(format_duration(summary["active_seconds"]))
+        # 上排两块：只统计当前查看的月份。
+        self.month_words_tile.set_value(f"{summary['total_chars']:,}")
+        self.month_duration_tile.set_value(format_duration(summary["active_seconds"]))
 
-        # 最后一行：码字总记录，累计全部历史（不只本月）。
+        # 下排三行：累计本地统计文件以来的全部历史，切换月份不受影响。
         total_chars = sum(row["total_chars"] for row in self.stats_rows)
         total_seconds = sum(row.get("active_seconds", 0) for row in self.stats_rows)
-        self.month_overview.setText(
-            f"总字数　{total_chars:,} 字\n"
-            f"总时长　{format_duration(total_seconds)}\n"
-            f"记录天数　{len(self.stats_rows)} 天"
-        )
+        self.month_total_labels["chars"].setText(f"{total_chars:,} 字")
+        self.month_total_labels["seconds"].setText(format_duration(total_seconds))
+        self.month_total_labels["days"].setText(f"{len(self.stats_rows)} 天")
 
     def _refresh_table(self) -> None:
         """把选中日期的各指标填进方块。
