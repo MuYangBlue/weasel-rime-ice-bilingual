@@ -1142,9 +1142,9 @@ class UserCenter(QMainWindow):
         title = self._label("本月码字总结", 13, TEXT, bold=True)
         left.addWidget(title)
 
-        self.month_words_tile = MetricTile("字数", "0", accent=True)
-        self.month_duration_tile = MetricTile("时长", "00:00:00")
-        self.month_days_tile = MetricTile("天数", "0 天")
+        self.month_words_tile = MetricTile("码字字数", "0", accent=True)
+        self.month_duration_tile = MetricTile("码字时长", "00:00:00")
+        self.month_days_tile = MetricTile("码字天数", "0 天")
         for tile in (self.month_words_tile, self.month_duration_tile, self.month_days_tile):
             left.addWidget(tile)
         columns.addLayout(left, 1)
@@ -1155,9 +1155,9 @@ class UserCenter(QMainWindow):
         right.addWidget(self._label("码字总记录", 13, TEXT, bold=True))
 
         self.month_total_tiles: dict[str, MetricTile] = {}
-        self.month_total_tiles["chars"] = MetricTile("字数", "0")
-        self.month_total_tiles["seconds"] = MetricTile("时长", "00:00:00")
-        self.month_total_tiles["days"] = MetricTile("天数", "0 天")
+        self.month_total_tiles["chars"] = MetricTile("总字数", "0")
+        self.month_total_tiles["seconds"] = MetricTile("总时长", "00:00:00")
+        self.month_total_tiles["days"] = MetricTile("总天数", "0 天")
         for tile in self.month_total_tiles.values():
             right.addWidget(tile)
         columns.addLayout(right, 1)
