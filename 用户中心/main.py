@@ -818,10 +818,15 @@ class UserCenter(QMainWindow):
 
         参考稿的卡片是扁平的细描边，Qt 的 StyledPanel 自带立体边框，
         观感偏旧，所以所有卡片都走这里，不再各写一套样式。
+
+        规则必须用 #panelFrame 限定：QLabel 是 QFrame 的子类，
+        若写 QFrame {...} 会级联到面板内的每个标签，让标题和文字
+        都套上一层矩形边框。
         """
         panel = QFrame()
+        panel.setObjectName("panelFrame")
         panel.setStyleSheet(
-            f"QFrame {{ background: #FFFFFF; border: 1px solid {LINE};"
+            f"#panelFrame {{ background: #FFFFFF; border: 1px solid {LINE};"
             f" border-radius: {PANEL_RADIUS}px; }}"
         )
         if width is not None:
@@ -1122,50 +1127,42 @@ class UserCenter(QMainWindow):
         return card
 
     def _build_month_panel(self) -> QWidget:
-        card = self._panel(230)
+        card = self._panel(280)
         layout = QVBoxLayout(card)
         layout.setContentsMargins(14, 12, 14, 12)
-        layout.setSpacing(0)
+        layout.setSpacing(8)
 
-        self.month_title = self._label("本月码字总结", 13, TEXT, bold=True)
-        layout.addWidget(self.month_title)
-        layout.addSpacing(10)
+        # 左右两栏：左「本月码字总结」，右「码字总记录」。
+        columns = QHBoxLayout()
+        columns.setSpacing(12)
 
-        # 本月字数与时长并排两块，复用指标方块的样式，与下方明细区观感一致。
-        tiles = QHBoxLayout()
-        tiles.setSpacing(8)
-        self.month_words_tile = MetricTile("本月字数", "0", accent=True)
-        self.month_duration_tile = MetricTile("本月时长", "00:00:00")
-        tiles.addWidget(self.month_words_tile, 1)
-        tiles.addWidget(self.month_duration_tile, 1)
-        layout.addLayout(tiles)
-        layout.addSpacing(10)
+        # —— 左栏：本月（随查看月份切换）——
+        left = QVBoxLayout()
+        left.setSpacing(6)
+        title = self._label("本月码字总结", 13, TEXT, bold=True)
+        left.addWidget(title)
 
-        # 分隔线：把「本月」与「累计全部历史」两个口径在视觉上分开。
-        rule = QFrame()
-        rule.setFrameShape(QFrame.HLine)
-        rule.setStyleSheet(f"color: {LINE}; background-color: {LINE}; max-height: 1px; border: none;")
-        layout.addWidget(rule)
-        layout.addSpacing(8)
+        self.month_words_tile = MetricTile("字数", "0", accent=True)
+        self.month_duration_tile = MetricTile("时长", "00:00:00")
+        self.month_days_tile = MetricTile("天数", "0 天")
+        for tile in (self.month_words_tile, self.month_duration_tile, self.month_days_tile):
+            left.addWidget(tile)
+        columns.addLayout(left, 1)
 
-        # 码字总记录：标签居左、数值居右，逐行对齐。
-        layout.addWidget(self._label("码字总记录", 11, TEXT_3))
-        layout.addSpacing(4)
-        self.month_total_labels: dict[str, QLabel] = {}
-        for key, caption in (
-            ("chars", "总字数"),
-            ("seconds", "总时长"),
-            ("days", "记录天数"),
-        ):
-            row = QHBoxLayout()
-            row.addWidget(self._label(caption, 12, TEXT_2))
-            row.addStretch()
-            value = self._label("—", 12, TEXT, bold=True)
-            value.setStyleSheet(f"font-size: 12px; color: {TEXT}; font-weight: 600; {MONO_STYLE}")
-            row.addWidget(value)
-            self.month_total_labels[key] = value
-            layout.addLayout(row)
-            layout.addSpacing(3)
+        # —— 右栏：码字总记录（累计本地统计以来的全部历史）——
+        right = QVBoxLayout()
+        right.setSpacing(6)
+        right.addWidget(self._label("码字总记录", 13, TEXT, bold=True))
+
+        self.month_total_tiles: dict[str, MetricTile] = {}
+        self.month_total_tiles["chars"] = MetricTile("字数", "0")
+        self.month_total_tiles["seconds"] = MetricTile("时长", "00:00:00")
+        self.month_total_tiles["days"] = MetricTile("天数", "0 天")
+        for tile in self.month_total_tiles.values():
+            right.addWidget(tile)
+        columns.addLayout(right, 1)
+
+        layout.addLayout(columns)
         layout.addStretch()
         return card
 
@@ -1345,16 +1342,23 @@ class UserCenter(QMainWindow):
 
     def _refresh_month_panel(self) -> None:
         summary = month_summary(self.stats_rows, self.view_year, self.view_month)
-        # 上排两块：只统计当前查看的月份。
+        # 左栏：只统计当前查看的月份。
         self.month_words_tile.set_value(f"{summary['total_chars']:,}")
         self.month_duration_tile.set_value(format_duration(summary["active_seconds"]))
+        writing_days = sum(
+            1 for row in self.stats_rows
+            if row["date"].startswith(f"{self.view_year:04d}-{self.view_month:02d}")
+            and row["commits"] > 0
+        )
+        self.month_days_tile.set_value(f"{writing_days} 天")
 
-        # 下排三行：累计本地统计文件以来的全部历史，切换月份不受影响。
+        # 右栏：累计本地统计文件以来的全部历史，切换月份不受影响。
         total_chars = sum(row["total_chars"] for row in self.stats_rows)
         total_seconds = sum(row.get("active_seconds", 0) for row in self.stats_rows)
-        self.month_total_labels["chars"].setText(f"{total_chars:,} 字")
-        self.month_total_labels["seconds"].setText(format_duration(total_seconds))
-        self.month_total_labels["days"].setText(f"{len(self.stats_rows)} 天")
+        record_days = sum(1 for row in self.stats_rows if row["commits"] > 0)
+        self.month_total_tiles["chars"].set_value(f"{total_chars:,}")
+        self.month_total_tiles["seconds"].set_value(format_duration(total_seconds))
+        self.month_total_tiles["days"].set_value(f"{record_days} 天")
 
     def _refresh_table(self) -> None:
         """把选中日期的各指标填进方块。
