@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -72,6 +72,24 @@ def open_path(path: Path) -> None:
 def start_detached(command: list[str], cwd: Path | None = None) -> None:
     flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     subprocess.Popen(command, cwd=str(cwd) if cwd else None, creationflags=flags)
+
+
+def app_icon() -> QIcon:
+    """应用图标：蓝底白「码」。
+
+    路径解析顺序：PyInstaller 打包后资源在 sys._MEIPASS（onefile）或
+    onedir 的 _internal 下，本文件旁的相对路径两种场景都不成立；
+    源码运行则直接用本文件所在目录。找不到时返回空 QIcon，
+    界面退回 Qt 默认图标，不报错。
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    else:
+        base = Path(__file__).resolve().parent
+    icon_path = base / "app.ico"
+    if icon_path.exists():
+        return QIcon(str(icon_path))
+    return QIcon()
 
 
 # ---------------------------------------------------------------------------
@@ -532,12 +550,14 @@ class UserCenter(QMainWindow):
         super().__init__()
         ensure_dirs()
         self.setWindowTitle("小狼毫用户中心")
+        self.setWindowIcon(app_icon())
         self.resize(980, 650)
         self._build_ui()
         self._build_tray()
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
+        self.tray.setIcon(app_icon())
         self.tray.setToolTip("小狼毫用户中心")
         menu = QMenu()
         show = QAction("打开用户中心", self)
