@@ -843,9 +843,6 @@ class UserCenter(QMainWindow):
         outer.setSpacing(0)
 
         outer.addWidget(self._label("码字统计", 19, TEXT, bold=True))
-        outer.addSpacing(4)
-        subtitle = self._label("字数按实际上屏统计，码字时长按按键间隔累计（3 秒活跃窗口）", 12, TEXT_3)
-        outer.addWidget(subtitle)
         outer.addSpacing(14)
 
         self.stats_rows: list[dict] = []
@@ -877,17 +874,15 @@ class UserCenter(QMainWindow):
         self.detail_title = self._label("当日明细", 11, TEXT_3)
         detail_layout.addWidget(self.detail_title)
 
-        # 指标方块：六个一行，选中日期切换时只更新数值，不重建控件。
+        # 指标方块：第一行只放四类字符构成，选中日期切换时只更新数值。
         tiles_row = QHBoxLayout()
         tiles_row.setSpacing(8)
         self.metric_tiles: dict[str, MetricTile] = {}
         for key, caption, accent in (
-            ("total_chars", "总字符", True),
-            ("cjk_chars", "中文", False),
+            ("cjk_chars", "中文", True),
             ("latin_chars", "英文", False),
             ("digit_chars", "数字", False),
             ("punct_chars", "标点", False),
-            ("active_seconds", "码字时长", False),
         ):
             tile = MetricTile(caption, "—", accent)
             self.metric_tiles[key] = tile
@@ -1132,15 +1127,28 @@ class UserCenter(QMainWindow):
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(0)
 
-        self.month_title = self._label("", 13, TEXT_3)
+        self.month_title = self._label("本月码字总结", 13, TEXT_3)
         layout.addWidget(self.month_title)
-        layout.addSpacing(2)
-        self.month_average = self._label("0", 26, TEXT, bold=True)
+        layout.addSpacing(10)
+
+        # 第二行：本月字数
+        self.month_words_caption = self._label("字数", 11, TEXT_3)
+        layout.addWidget(self.month_words_caption)
+        self.month_average = self._label("0", 24, TEXT, bold=True)
         layout.addWidget(self.month_average)
-        layout.addWidget(self._label("字/天（按写作天数）", 11, TEXT_3))
-        layout.addSpacing(14)
-        layout.addWidget(self._label("本月概况", 13, TEXT_3))
-        layout.addSpacing(6)
+        layout.addSpacing(10)
+
+        # 第三行：本月时长
+        self.month_duration_caption = self._label("时长", 11, TEXT_3)
+        layout.addWidget(self.month_duration_caption)
+        self.month_duration = self._label("00:00:00", 20, TEXT, bold=True)
+        layout.addWidget(self.month_duration)
+        layout.addSpacing(12)
+
+        # 最后一行：码字总记录（累计全部历史）
+        self.month_total_caption = self._label("码字总记录", 13, TEXT_3)
+        layout.addWidget(self.month_total_caption)
+        layout.addSpacing(4)
         self.month_overview = self._label("", 12, TEXT_2)
         self.month_overview.setWordWrap(True)
         layout.addWidget(self.month_overview)
@@ -1323,13 +1331,17 @@ class UserCenter(QMainWindow):
 
     def _refresh_month_panel(self) -> None:
         summary = month_summary(self.stats_rows, self.view_year, self.view_month)
-        self.month_title.setText(f"{self.view_month} 月日均码字")
-        self.month_average.setText(f"{summary['average']:,}")
+        # 第二行：本月字数；第三行：本月时长。
+        self.month_average.setText(f"{summary['total_chars']:,}")
+        self.month_duration.setText(format_duration(summary["active_seconds"]))
+
+        # 最后一行：码字总记录，累计全部历史（不只本月）。
+        total_chars = sum(row["total_chars"] for row in self.stats_rows)
+        total_seconds = sum(row.get("active_seconds", 0) for row in self.stats_rows)
         self.month_overview.setText(
-            f"总字数　　{summary['total_chars']:,} 字\n"
-            f"累计时长　{format_duration(summary['active_seconds'])}\n"
-            f"写作天数　{summary['writing_days']} 天\n"
-            f"最长连续　{summary['longest_streak']} 天"
+            f"总字数　{total_chars:,} 字\n"
+            f"总时长　{format_duration(total_seconds)}\n"
+            f"记录天数　{len(self.stats_rows)} 天"
         )
 
     def _refresh_table(self) -> None:
@@ -1347,14 +1359,10 @@ class UserCenter(QMainWindow):
                 tile.set_value("—")
             return
 
-        self.metric_tiles["total_chars"].set_value(f"{row['total_chars']:,}")
         self.metric_tiles["cjk_chars"].set_value(f"{row['cjk_chars']:,}")
         self.metric_tiles["latin_chars"].set_value(f"{row['latin_chars']:,}")
         self.metric_tiles["digit_chars"].set_value(f"{row['digit_chars']:,}")
         self.metric_tiles["punct_chars"].set_value(f"{row['punct_chars']:,}")
-        self.metric_tiles["active_seconds"].set_value(
-            format_duration(row.get("active_seconds", 0))
-        )
         self.metric_tiles["commits"].set_value(f"{row['commits']:,}")
         self.metric_tiles["active_range"].set_value(
             f"{row['first_commit']} - {row['last_commit']}"
@@ -1362,20 +1370,13 @@ class UserCenter(QMainWindow):
         self.metric_tiles["busiest"].set_value(self._busiest_range(row["hourly"]))
 
     def _refresh_hint(self) -> None:
-        rows = self.stats_rows
-        has_duration = any(row.get("active_seconds", 0) for row in rows)
-        if not rows:
+        """底部提示：只在完全没有数据时给一句引导，其余情况不显示文字。"""
+        if not self.stats_rows:
             self.stats_hint.setText("还没有统计数据，用输入法打几个字后回来刷新。")
-        elif not has_duration:
-            self.stats_hint.setText(
-                "码字时长是 3.4.30 新增的采集项：3.4.31 起按按键间隔累计，"
-                "只计 3 秒以内的间隔。历史数据没有该字段，显示为 00:00:00。"
-            )
+            self.stats_hint.setVisible(True)
         else:
-            self.stats_hint.setText(
-                "码字时长按按键间隔累计（≤3 秒算活跃，对齐阅文作家助手）；"
-                "趋势与平均按自然日计算，含未写字的日子。"
-            )
+            self.stats_hint.setText("")
+            self.stats_hint.setVisible(False)
 
     @staticmethod
     def _busiest_range(hourly: list[int]) -> str:
