@@ -13,5 +13,5 @@ patch:
     - {accept: "Control+1", select: rime_ice, when: composing}
     - {accept: "Control+2", select: double_pinyin_flypy, when: composing}
   schema_list:
-    - {schema: rime_ice}
     - {schema: double_pinyin_flypy}
+    - {schema: rime_ice}

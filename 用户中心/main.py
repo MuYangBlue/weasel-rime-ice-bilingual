@@ -9,7 +9,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -647,7 +647,11 @@ class UserCenter(QMainWindow):
             f"    - {{schema: {schema_id}}}\n"
             f"    - {{schema: {other_schema}}}\n"
         )
-        tail, count = re.subn(r"(?m)^  schema_list:\n(?:    - .*\n)*", schema_block, tail)
+        # 末尾用 (?:\n|$) 而非单纯 \n：文件最后一行可能没有换行符，
+        # 早先只匹配 \n 会让那条残留下来，和新块拼成三条且首条重复。
+        tail, count = re.subn(
+            r"(?m)^  schema_list:[ \t]*\n(?:    - .*(?:\n|$))*", schema_block, tail
+        )
         if count == 0:
             # 漏写了 schema_list 时补上，而不是报错拒绝，避免按钮再次变成空操作。
             tail = "\n" + schema_block + tail.lstrip("\n")
@@ -806,7 +810,7 @@ class UserCenter(QMainWindow):
 
         outer.addWidget(self._label("码字统计", 19, TEXT, bold=True))
         outer.addSpacing(4)
-        subtitle = self._label("字数按实际上屏统计，码字时长按相邻上屏间隔累计", 12, TEXT_3)
+        subtitle = self._label("字数按实际上屏统计，码字时长按按键间隔累计（3 秒活跃窗口）", 12, TEXT_3)
         outer.addWidget(subtitle)
         outer.addSpacing(14)
 
@@ -868,6 +872,17 @@ class UserCenter(QMainWindow):
         outer.addLayout(bottom)
 
         self.refresh_stats()
+
+        # 自动刷新：统计文件由输入法写入，界面不会自己感知变化。
+        # 每 5 秒重读一次，让数字随打字更新，无需手动切页。
+        # 用单个 QTimer 实例，重复进入统计页时先停掉旧的，避免叠加多个定时器。
+        existing = getattr(self, "stats_timer", None)
+        if existing is not None:
+            existing.stop()
+        self.stats_timer = QTimer(self)
+        self.stats_timer.setInterval(5000)
+        self.stats_timer.timeout.connect(self.refresh_stats_light)
+        self.stats_timer.start()
         return page
 
     def _build_today_card(self) -> QWidget:
@@ -1118,6 +1133,23 @@ class UserCenter(QMainWindow):
         self._refresh_month_panel()
         self._refresh_table()
         self._refresh_hint()
+
+    def refresh_stats_light(self) -> None:
+        """定时器用的轻量刷新：只更新数字，不重建控件。
+
+        完整的 refresh_stats 会清空并重建整月日历格子（约 30 个控件），
+        每 5 秒执行一次会闪烁且浪费。这里跳过日历重建与区间切换，
+        只把随时间变化的数字重新填一遍。
+        """
+        self.stats_rows = read_stats_rows()
+        self._refresh_today()
+        self._refresh_trend()
+        self._refresh_month_panel()
+        self._refresh_table()
+        self._refresh_hint()
+        # 时辰分布若正在显示，也要跟着更新（选中的日期不变）。
+        if self.hour_view:
+            self._refresh_hour_chart()
 
     def _refresh_today(self) -> None:
         today = datetime.now().strftime("%Y-%m-%d")
