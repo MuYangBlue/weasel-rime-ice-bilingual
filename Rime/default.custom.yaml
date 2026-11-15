@@ -2,8 +2,16 @@ customization:
   distribution_code_name: Weasel
   distribution_version: 0.17.4
   generator: "Rime::SwitcherSettings"
-  modified_time: "Tue Aug 25 12:56:38 2026"
+  modified_time: "Fri Nov 13 16:21:28 2026"
   rime_version: 1.13.1
 patch:
+  "key_binder/bindings/+":
+    # when: composing —— 只在输入法正在拼字时切换方案。
+    # 不能用 when: always：那会让输入法吞掉所有程序里的 Ctrl+1/Ctrl+2
+    # （浏览器切标签、游戏快捷键都用这两个组合），并顺手把方案切回全拼，
+    # 表现为「方案固定不住、用着用着变回拼音」。
+    - {accept: "Control+1", select: rime_ice, when: composing}
+    - {accept: "Control+2", select: double_pinyin_flypy, when: composing}
   schema_list:
     - {schema: rime_ice}
+    - {schema: double_pinyin_flypy}

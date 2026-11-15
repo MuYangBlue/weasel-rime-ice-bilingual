@@ -12,20 +12,25 @@
 
 patch:
 
+  # 覆盖编码范围优先，同范围内按实际上屏次数排序；放在错音纠正之后。
+  "engine/filters/@after 0": "lua_filter@*frequency_filter"
+  # 只记录每日统计数字，不保存输入原文。
+  "engine/processors/@before 1": "lua_processor@*input_stats"
+
   # ------------------------------------------------------------------
   # 1. 开关：可用快捷键临时关闭双语显示
-  #    沿用方案中 emoji 开关的写法（reset: 1 表示默认开启）
+  #    默认使用第一个状态「中」。不设置 reset，避免切换窗口时强制恢复默认状态，
+  #    手动切换后保持当前状态，直到再次切换。
   # ------------------------------------------------------------------
   "switches/@next":
     name: bilingual
     states: [ 中, 中英 ]
     abbrev: [ 中, 英 ]
-    reset: 1
 
   # ------------------------------------------------------------------
   # 2. 挂载滤镜
   #
-  #    位置说明（filters 列表下标从 0 开始）：
+  #    位置说明（基础 filters 列表下标从 0 开始）：
   #      0 corrector
   #      1 radical_reverse_lookup
   #      2 autocap_filter
@@ -33,18 +38,20 @@ patch:
   #      4 pin_cand_filter
   #      5 long_word_filter
   #      6 reduce_english_filter
-  #      7 simplifier@emoji        <-- 插在它前面
+  #      7 simplifier@emoji
+  #    frequency_filter 在 corrector 后插入，因此 emoji 的实际位置变为 8。
+
   #
   #    必须排在 corrector 之后：corrector 用 comment 判断错音后会清空它，
   #    注释区正好让给英文；若排在它前面会被清掉。
   #    必须排在 simplifier@emoji 与 simplifier@traditionalize 之前：
   #    此时候选文本仍是简体汉字，才查得到词表。
   #
-  #    ⚠ 这里的 7 是按下标插入，属索引依赖写法。若以后更新了上游的
+  #    ⚠ 这里的 8 是按下标插入，属索引依赖写法。若以后更新了上游的
   #    rime_ice.schema.yaml 且 filters 增删了元素，需要重新核对下标。
   #    部署后可在 build/rime_ice.schema.yaml 的 engine/filters 里确认实际顺序。
   # ------------------------------------------------------------------
-  "engine/filters/@before 7": "lua_filter@*bilingual_filter"
+  "engine/filters/@before 8": "lua_filter@*bilingual_filter"
 
   # ------------------------------------------------------------------
   # 3. 快捷键：切换双语显示

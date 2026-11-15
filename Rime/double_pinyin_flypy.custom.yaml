@@ -1,0 +1,22 @@
+# Rime schema patch
+# encoding: utf-8
+#
+# 小鹤双拼的本地定制。
+# 本文件只放个人改动，不动 double_pinyin_flypy.schema.yaml 上游文件，
+# 这样以后更新雾凇拼音配置时不会覆盖这里的内容。
+#
+# 目的：让双拼方案也有输入统计和词频加权，与全拼保持一致。
+# 两个方案共用同一份 data/input_stats.tsv 和 data/frequency_counts.tsv，
+# 切换方案时数据连续，不会因为换方案而丢统计。
+#
+# 修改后需「重新部署」才生效。
+
+patch:
+
+  # 只记录每日统计数字，不保存输入原文。
+  # 双拼的 processors 首项是 lua_processor@*select_character（以词定字），
+  # 插在下标 1 之后，与全拼方案中的相对位置一致。
+  "engine/processors/@before 1": "lua_processor@*input_stats"
+
+  # 覆盖编码范围优先，同范围内按实际上屏次数排序；放在 corrector 之后。
+  "engine/filters/@after 0": "lua_filter@*frequency_filter"

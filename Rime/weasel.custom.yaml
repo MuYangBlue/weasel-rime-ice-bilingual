@@ -2,7 +2,16 @@ customization:
   distribution_code_name: Weasel
   distribution_version: 0.17.4
   generator: "Weasel::UIStyleSettings"
-  modified_time: "Tue Aug 25 12:28:54 2026"
+  modified_time: "Fri Oct 30 19:28:26 2026"
   rime_version: 1.13.1
 patch:
-  "style/color_scheme": flypy
+  "style/color_scheme": steam
+  "style/enhanced_position": true
+  "style/inline_preedit": true
+  # 明确恢复正常候选框边距，覆盖先前隐藏候选框测试的残留。
+  "style/layout/margin_x": 8
+  "style/layout/margin_y": 8
+  # 旧版 CS:GO 覆盖暂保留；实际测试游戏已确认是 CS2。
+  "app_options/csgo.exe/inline_preedit": false
+  # 撤销 CS2 关闭行内预编辑的无效测试覆盖，恢复继承全局 true。
+  # 本轮仅比较窗口模式下的候选框，不测试独占全屏。
