@@ -284,13 +284,23 @@ class CalendarCell(QFrame):
         day_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(day_label)
 
-        # 字数：独立小色块，着色只对它生效。没有字数就不渲染色块。
-        # 码字时长不再放进日历格，只在左侧今日卡显示。
+        # 字数：独立小色块，着色只对它生效。
+        # 始终创建标签（哪怕当天没字数），这样自动刷新时可以原地改文字与
+        # 底色，而不必销毁重建整格——重建会闪烁，也会丢掉悬停状态。
+        self._words_label = QLabel(f"{chars:,}" if chars else "")
+        self._words_label.setAlignment(Qt.AlignCenter)
+        self._words_label.setStyleSheet(self._words_style(chars, heat))
+        self._words_label.setVisible(bool(chars))
+        layout.addWidget(self._words_label)
+
+    def update_values(self, chars: int, heat: int) -> None:
+        """原地更新字数与热度底色，供定时刷新使用（不重建控件）。"""
         if chars:
-            words_label = QLabel(f"{chars:,}")
-            words_label.setAlignment(Qt.AlignCenter)
-            words_label.setStyleSheet(self._words_style(chars, heat))
-            layout.addWidget(words_label)
+            self._words_label.setText(f"{chars:,}")
+            self._words_label.setStyleSheet(self._words_style(chars, heat))
+            self._words_label.setVisible(True)
+        else:
+            self._words_label.setVisible(False)
 
     @staticmethod
     def _words_style(chars: int, heat: int) -> str:
@@ -875,6 +885,8 @@ class UserCenter(QMainWindow):
         self.selected_day: str | None = None
         self.hour_view = False
         self.view_year, self.view_month = datetime.now().year, datetime.now().month
+        # 日历格索引：键为日期，值为控件，供自动刷新原地更新数值。
+        self.calendar_cells: dict[str, CalendarCell] = {}
 
         top = QHBoxLayout()
         top.setSpacing(14)
@@ -1239,6 +1251,8 @@ class UserCenter(QMainWindow):
         self._refresh_month_panel()
         self._refresh_table()
         self._refresh_hint()
+        # 日历也要跟着更新：只改文字与底色，不重建控件。
+        self._refresh_calendar_values()
         # 时辰分布若正在显示，也要跟着更新（选中的日期不变）。
         if self.hour_view:
             self._refresh_hour_chart()
@@ -1270,6 +1284,8 @@ class UserCenter(QMainWindow):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        # 重建时清空索引，避免指向已被 deleteLater 的旧控件。
+        self.calendar_cells = {}
 
         year, month = self.view_year, self.view_month
         self.calendar_title.setText(f"{year}年{month:02d}月")
@@ -1296,6 +1312,7 @@ class UserCenter(QMainWindow):
             )
             cell.clicked.connect(self.select_day)
             self.calendar_grid.addWidget(cell, row_index, column)
+            self.calendar_cells[key] = cell
             column += 1
             if column > 6:
                 column = 0
@@ -1305,6 +1322,25 @@ class UserCenter(QMainWindow):
         if self.selected_day is None or not self.selected_day.startswith(f"{year:04d}-{month:02d}"):
             self.selected_day = today if today.startswith(f"{year:04d}-{month:02d}") else f"{year:04d}-{month:02d}-01"
         self._refresh_hour_chart()
+
+    def _refresh_calendar_values(self) -> None:
+        """原地更新日历格的字数与热度，不重建控件。
+
+        供定时刷新调用。早先的轻量刷新直接跳过了日历，导致清空数据或新增
+        字数后，日历仍停留在首次加载的样子——这是「码字日历怎么还在」的
+        直接原因。这里只改文字与底色，30 个格子不会闪烁。
+        """
+        year, month = self.view_year, self.view_month
+        by_date = {
+            row["date"]: row
+            for row in self.stats_rows
+            if row["date"].startswith(f"{year:04d}-{month:02d}")
+        }
+        peak = max((row["total_chars"] for row in by_date.values()), default=0)
+        for key, cell in self.calendar_cells.items():
+            data = by_date.get(key)
+            chars = data["total_chars"] if data else 0
+            cell.update_values(chars, self._heat_ratio(chars, peak))
 
     def select_day(self, date_key: str) -> None:
         """点日历某天：上方图表区切换成该日的时辰分布，下方方块换成该日指标。"""
