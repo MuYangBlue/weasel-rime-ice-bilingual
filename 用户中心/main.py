@@ -25,8 +25,6 @@ from PySide6.QtWidgets import (
     QSystemTrayIcon,
     QMenu,
     QStackedWidget,
-    QTableWidget,
-    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -493,6 +491,42 @@ class DropZone(QFrame):
             event.acceptProposedAction()
 
 
+class MetricTile(QFrame):
+    """单个指标小方块：上方是名称，下方是数值。
+
+    用于「每日明细」区域：选中某个日期后，把该日的各指标并排铺成小方块，
+    取代原来横向铺开的大表格。数值用等宽数字，避免刷新时宽度跳动。
+    """
+
+    def __init__(self, caption: str, value: str, accent: bool = False) -> None:
+        super().__init__()
+        self.setStyleSheet(
+            f"QFrame {{ background: {ACCENT_SOFT if accent else 'transparent'};"
+            f" border: 1px solid {LINE}; border-radius: {PANEL_RADIUS}px; }}"
+        )
+        self.setMinimumHeight(62)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(2)
+
+        caption_label = QLabel(caption)
+        caption_label.setStyleSheet(f"font-size: 11px; color: {TEXT_3}; border: none;")
+        layout.addWidget(caption_label)
+
+        value_label = QLabel(value)
+        value_label.setStyleSheet(
+            f"font-size: {'17' if accent else '15'}px;"
+            f" color: {ACCENT if accent else TEXT}; font-weight: 600;"
+            f" border: none; {MONO_STYLE}"
+        )
+        layout.addWidget(value_label)
+        # 直接持有数值标签，避免靠 findChildren() 的返回顺序去猜哪个是数值。
+        self._value_label = value_label
+
+    def set_value(self, value: str) -> None:
+        self._value_label.setText(value)
+
+
 class UserCenter(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -834,27 +868,46 @@ class UserCenter(QMainWindow):
         outer.addLayout(middle)
         outer.addSpacing(14)
 
-        table_panel = self._panel()
-        table_layout = QVBoxLayout(table_panel)
-        table_layout.setContentsMargins(12, 10, 12, 10)
-        table_layout.addWidget(self._label("每日明细", 11, TEXT_3))
-        self.stats_table = QTableWidget(0, 10)
-        self.stats_table.setHorizontalHeaderLabels(
-            ["日期", "提交", "总字符", "中文", "英文", "数字", "标点", "码字时长", "活跃区间", "高峰时段"]
-        )
-        self.stats_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.stats_table.setSelectionMode(QTableWidget.NoSelection)
-        self.stats_table.verticalHeader().setVisible(False)
-        self.stats_table.setShowGrid(False)
-        self.stats_table.setStyleSheet(
-            f"QTableWidget {{ border: none; font-size: 12px; color: {TEXT_2}; }}"
-            f"QHeaderView::section {{ background: transparent; border: none;"
-            f" border-bottom: 1px solid {LINE}; color: {TEXT_3}; font-size: 11px;"
-            f" padding: 4px 6px; }}"
-        )
-        self.stats_table.setMinimumHeight(170)
-        table_layout.addWidget(self.stats_table)
-        outer.addWidget(table_panel, 1)
+        detail_panel = self._panel()
+        detail_layout = QVBoxLayout(detail_panel)
+        detail_layout.setContentsMargins(12, 10, 12, 12)
+        detail_layout.setSpacing(8)
+
+        # 标题随选中日期变化，例如「11-15 当日明细」。
+        self.detail_title = self._label("当日明细", 11, TEXT_3)
+        detail_layout.addWidget(self.detail_title)
+
+        # 指标方块：六个一行，选中日期切换时只更新数值，不重建控件。
+        tiles_row = QHBoxLayout()
+        tiles_row.setSpacing(8)
+        self.metric_tiles: dict[str, MetricTile] = {}
+        for key, caption, accent in (
+            ("total_chars", "总字符", True),
+            ("cjk_chars", "中文", False),
+            ("latin_chars", "英文", False),
+            ("digit_chars", "数字", False),
+            ("punct_chars", "标点", False),
+            ("active_seconds", "码字时长", False),
+        ):
+            tile = MetricTile(caption, "—", accent)
+            self.metric_tiles[key] = tile
+            tiles_row.addWidget(tile, 1)
+        detail_layout.addLayout(tiles_row)
+
+        # 第二行：提交次数、活跃区间、高峰时段，信息偏长，单独放宽。
+        tiles_row2 = QHBoxLayout()
+        tiles_row2.setSpacing(8)
+        for key, caption in (
+            ("commits", "提交次数"),
+            ("active_range", "活跃区间"),
+            ("busiest", "高峰时段"),
+        ):
+            tile = MetricTile(caption, "—")
+            self.metric_tiles[key] = tile
+            tiles_row2.addWidget(tile, 1)
+        detail_layout.addLayout(tiles_row2)
+
+        outer.addWidget(detail_panel)
 
         outer.addSpacing(8)
         bottom = QHBoxLayout()
@@ -1215,9 +1268,10 @@ class UserCenter(QMainWindow):
         self._refresh_hour_chart()
 
     def select_day(self, date_key: str) -> None:
-        """点日历某天：上方图表区切换成该日的时辰分布。"""
+        """点日历某天：上方图表区切换成该日的时辰分布，下方方块换成该日指标。"""
         self.selected_day = date_key
         self._show_hour_view(True)
+        self._refresh_table()
 
     def clear_day_selection(self) -> None:
         """返回趋势视图。"""
@@ -1279,28 +1333,33 @@ class UserCenter(QMainWindow):
         )
 
     def _refresh_table(self) -> None:
-        self.stats_table.setRowCount(0)
-        for row in self.stats_rows[-31:][::-1]:
-            index = self.stats_table.rowCount()
-            self.stats_table.insertRow(index)
-            values = [
-                row["date"],
-                str(row["commits"]),
-                str(row["total_chars"]),
-                str(row["cjk_chars"]),
-                str(row["latin_chars"]),
-                str(row["digit_chars"]),
-                str(row["punct_chars"]),
-                format_duration(row.get("active_seconds", 0)),
-                f"{row['first_commit']} - {row['last_commit']}",
-                self._busiest_range(row["hourly"]),
-            ]
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                if column >= 1 and column <= 7:
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                self.stats_table.setItem(index, column, item)
-        self.stats_table.resizeColumnsToContents()
+        """把选中日期的各指标填进方块。
+
+        原来的多日表格已改为「点日历某天 → 该日指标小方块」。
+        找不到选中日期的记录时显示破折号，不伪造 0。
+        """
+        date_key = self.selected_day or datetime.now().strftime("%Y-%m-%d")
+        row = next((item for item in self.stats_rows if item["date"] == date_key), None)
+        self.detail_title.setText(f"{date_key[5:]} 当日明细")
+
+        if row is None:
+            for tile in self.metric_tiles.values():
+                tile.set_value("—")
+            return
+
+        self.metric_tiles["total_chars"].set_value(f"{row['total_chars']:,}")
+        self.metric_tiles["cjk_chars"].set_value(f"{row['cjk_chars']:,}")
+        self.metric_tiles["latin_chars"].set_value(f"{row['latin_chars']:,}")
+        self.metric_tiles["digit_chars"].set_value(f"{row['digit_chars']:,}")
+        self.metric_tiles["punct_chars"].set_value(f"{row['punct_chars']:,}")
+        self.metric_tiles["active_seconds"].set_value(
+            format_duration(row.get("active_seconds", 0))
+        )
+        self.metric_tiles["commits"].set_value(f"{row['commits']:,}")
+        self.metric_tiles["active_range"].set_value(
+            f"{row['first_commit']} - {row['last_commit']}"
+        )
+        self.metric_tiles["busiest"].set_value(self._busiest_range(row["hourly"]))
 
     def _refresh_hint(self) -> None:
         rows = self.stats_rows
@@ -1309,12 +1368,13 @@ class UserCenter(QMainWindow):
             self.stats_hint.setText("还没有统计数据，用输入法打几个字后回来刷新。")
         elif not has_duration:
             self.stats_hint.setText(
-                "码字时长是 3.4.30 新增的采集项：只有相邻两次上屏间隔不超过 120 秒的部分才计入，"
-                "历史数据没有该字段，显示为 00:00:00。重新部署并打字后开始累积。"
+                "码字时长是 3.4.30 新增的采集项：3.4.31 起按按键间隔累计，"
+                "只计 3 秒以内的间隔。历史数据没有该字段，显示为 00:00:00。"
             )
         else:
             self.stats_hint.setText(
-                "码字时长按相邻上屏间隔累计（≤120 秒算活跃）；趋势与平均按自然日计算，含未写字的日子。"
+                "码字时长按按键间隔累计（≤3 秒算活跃，对齐阅文作家助手）；"
+                "趋势与平均按自然日计算，含未写字的日子。"
             )
 
     @staticmethod
